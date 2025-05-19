@@ -1,0 +1,20 @@
+.statsCard {
+  padding: 1.5rem;
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+
+.darkModeCard {
+  background-color: rgb(31, 41, 55);
+}
+
+.lightModeCard {
+  background-color: white;
+}
+
+.loader {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 16rem;
+}
