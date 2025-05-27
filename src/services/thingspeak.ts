@@ -28,6 +28,14 @@ class ThingSpeakService {
     this.validateCredentials();
     this.lastDataEndpoint = `${this.baseUrl}/channels/${this.channelId}/feeds/last.json`;
     this.historicalDataEndpoint = `${this.baseUrl}/channels/${this.channelId}/feeds.json`;
+  
+    // Verify and format credentials
+    this.channelId = this.channelId.trim();
+    this.apiKey = this.apiKey.trim();
+    
+    if (this.channelId.startsWith('channel_')) {
+      this.channelId = this.channelId.substring(8);
+    }
   }
 
   /**
@@ -35,8 +43,15 @@ class ThingSpeakService {
    */
   public async getLatestData(): Promise<ThingSpeakData> {
     try {
+      // Ensure we have valid credentials
+      this.validateCredentials();
+
       const response = await axios.get(this.lastDataEndpoint, {
-        params: { api_key: this.apiKey },
+        params: { 
+          api_key: this.apiKey,
+          results: 1,
+          timezone: 'UTC'
+        },
         timeout: 5000,
       });
 
@@ -190,6 +205,17 @@ class ThingSpeakService {
     if (typeof this.channelId !== 'string' || typeof this.apiKey !== 'string') {
       throw new Error('Channel ID and API key must be strings');
     }
+
+    // Verify channel ID is numeric
+    const channelNumber = parseInt(this.channelId, 10);
+    if (isNaN(channelNumber) || channelNumber.toString() !== this.channelId) {
+      throw new Error('Channel ID must be a valid number');
+    }
+
+    // Verify API key format (typically 16-character alphanumeric)
+    if (!/^[A-Z0-9]{16}$/i.test(this.apiKey)) {
+      throw new Error('Invalid API key format - should be 16 characters long');
+    }
   }
 
   private validateUpdateResponse(response: AxiosResponse): void {
@@ -203,26 +229,55 @@ class ThingSpeakService {
   }
 
   private handleError(error: AxiosError): Error {
+    // Log the full error for debugging
+    console.error('ThingSpeak API Error Details:', {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      config: {
+        url: error.config?.url,
+        method: error.config?.method,
+        params: error.config?.params
+      }
+    });
+
     if (error.response) {
       switch (error.response.status) {
         case 400:
-          return new Error('Invalid request - check your parameters');
+          let message = 'Invalid request - ';
+          if (!error.config?.params?.api_key) {
+            message += 'API key is required';
+          } else if (error.config?.url?.includes('feeds/last.json')) {
+            message += 'channel may be empty or API key may be invalid';
+          } else {
+            message += 'please check your parameters';
+          }
+          return new Error(message);
+
         case 401:
-          return new Error('Unauthorized - invalid API key');
+          return new Error('Unauthorized - please verify your API key');
+
         case 404:
-          return new Error('Channel not found - check your channel ID');
+          return new Error('Channel not found - please verify your channel ID');
+
         case 429:
-          return new Error('Rate limit exceeded - try again later');
+          return new Error('Rate limit exceeded - please wait a moment before trying again');
+
+        case 500:
+          return new Error('ThingSpeak server error - please try again later');
+
         default:
-          return new Error(`ThingSpeak API error: ${error.response.status}`);
+          return new Error(`ThingSpeak API error (${error.response.status}): ${error.response.statusText}`);
       }
     } else if (error.code === 'ECONNABORTED') {
-      return new Error('Request timeout - check your network connection');
+      return new Error('Request timeout - please check your network connection');
     } else if (error.request) {
-      return new Error('No response received from ThingSpeak');
+      return new Error('Unable to reach ThingSpeak servers - please check your internet connection');
     }
 
-    return error instanceof Error ? error : new Error('Unknown error occurred');
+    return error instanceof Error 
+      ? new Error(`ThingSpeak error: ${error.message}`) 
+      : new Error('An unknown error occurred while accessing ThingSpeak');
   }
 }
 

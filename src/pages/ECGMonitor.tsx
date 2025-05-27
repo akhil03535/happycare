@@ -1,33 +1,34 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Line } from 'react-chartjs-2';
-import { Heart, Zap, AlertTriangle, Activity, Info } from 'lucide-react';
+import { Heart, Zap, AlertTriangle, Activity, Info, Download } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import { ThingSpeakService } from '../services/thingspeak';
-import MLPredictionService from '../services/mlPrediction';
-import NotificationService from '../services/notification';
+import { notificationService } from '../services/notification';
+import type { ChartArea, Scale } from 'chart.js';
 import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler
+    Chart as ChartJS,
+    CategoryScale,
+    LinearScale,
+    PointElement,
+    LineElement,
+    Title,
+    Tooltip,
+    Legend,
+    ChartOptions,
+    Chart,
+    TooltipItem,
+    CoreScaleOptions
 } from 'chart.js';
-import ReactToPrint from 'react-to-print';
 
 // Register ChartJS components
 ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  Filler
+    CategoryScale,
+    LinearScale,
+    PointElement,
+    LineElement,
+    Title,
+    Tooltip,
+    Legend
 );
 
 // ECG interpretation constants
@@ -109,20 +110,190 @@ interface TooltipContext {
   };
 }
 
+interface PDFDocumentMetadata {
+  patientName: string;
+  patientId: string;
+  date: string;
+  heartRate: number;
+  interpretation: string;
+  alerts: string[];
+}
+
+interface UserProfile {
+  id: string;
+  name: string;
+  phone?: string;
+  thingspeakApiKey?: string;
+  thingspeakChannelId?: string;
+}
+
 const ECGMonitor: React.FC = () => {
   const [ecgData, setEcgData] = useState<number[]>([]);
   const [heartRate, setHeartRate] = useState<number>(72);
-  const [signalQuality, setSignalQuality] = useState<string>('Excellent');
+  const [signalQuality, setSignalQuality] = useState<'Excellent' | 'Fair' | 'Poor'>('Excellent');
   const [loading, setLoading] = useState<boolean>(true);
   const [alerts, setAlerts] = useState<string[]>([]);
   const [interpretation, setInterpretation] = useState(ECG_INTERPRETATIONS.NORMAL);
+  const [thingspeakConfig, setThingspeakConfig] = useState<{apiKey: string; channelId: string} | null>(null);
   const { darkMode } = useTheme();
-  const mlService = new MLPredictionService();
-  const notificationService = new NotificationService();
+  const chartRef = useRef<Chart<'line'> | null>(null);
 
-  // ThingSpeak configuration
-  const THINGSPEAK_CHANNEL_ID = '2917036';
-  const THINGSPEAK_API_KEY = 'VL392M64XGGOZMA2';
+  // Constants for ECG display
+  const PAPER_SPEED = 25; // 25 mm/s (clinical standard)
+  const MAJOR_GRID_SIZE = 5; // 5mm between major grid lines
+
+  // Load ThingSpeak configuration from user profile and listen for changes
+  useEffect(() => {
+    const loadConfig = () => {
+      const userData = localStorage.getItem('user');
+      if (!userData) {
+        setThingspeakConfig(null);
+        setAlerts(prev => {
+          const configAlert = 'Warning: User data not found. Please log in again.';
+          return prev.includes(configAlert) ? prev : [...prev, configAlert];
+        });
+        return;
+      }
+
+      try {
+        const user = JSON.parse(userData);
+        const apiKey = user.thingspeakApiKey?.trim();
+        const channelId = (user.thingspeakChannelId || user.thingspeakChannel)?.trim();
+
+        if (!apiKey || !channelId) {
+          throw new Error('Missing ThingSpeak credentials');
+        }
+
+        // Validate API key format
+        if (!/^[A-Z0-9]{16}$/i.test(apiKey)) {
+          throw new Error('Invalid API key format - should be 16 characters');
+        }
+
+        // Validate channel ID is numeric
+        if (!/^\d+$/.test(channelId)) {
+          throw new Error('Channel ID must be a valid number');
+        }
+
+        setThingspeakConfig({
+          apiKey,
+          channelId
+        });
+        
+        // Clear any previous configuration alerts
+        setAlerts(prev => prev.filter(alert => !alert.includes('ThingSpeak configuration')));
+      } catch (error) {
+        setThingspeakConfig(null);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        setAlerts(prev => {
+          const configAlert = `Warning: ${errorMessage}. Please update your profile with valid ThingSpeak credentials.`;
+          return prev.includes(configAlert) ? prev : [...prev, configAlert];
+        });
+      }
+    };
+
+    // Initial load
+    loadConfig();
+
+    // Listen for storage changes
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'user') {
+        loadConfig();
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+  // Setup data fetching
+  useEffect(() => {
+    let interval: number;
+    const startFetching = () => {
+      if (thingspeakConfig) {
+        fetchECGData();
+        interval = window.setInterval(fetchECGData, 1000);
+      }
+    };
+
+    startFetching();
+    return () => {
+      if (interval) {
+        window.clearInterval(interval);
+      }
+    };
+  }, [thingspeakConfig]);
+
+  const fetchECGData = async () => {
+    try {
+      if (!thingspeakConfig) {
+        throw new Error('ThingSpeak configuration not found');
+      }
+
+      // Validate ThingSpeak config before making the request
+      const channelId = thingspeakConfig.channelId.trim();
+      const apiKey = thingspeakConfig.apiKey.trim();
+
+      // Validate API key format
+      if (!/^[A-Z0-9]{16}$/i.test(apiKey)) {
+        throw new Error('Invalid ThingSpeak API key format - please check your configuration');
+      }
+
+      // Validate channel ID is numeric
+      if (!/^\d+$/.test(channelId)) {
+        throw new Error('Invalid ThingSpeak channel ID - must be a number');
+      }
+
+      const thingspeak = new ThingSpeakService(channelId, apiKey);
+      
+      const data = await thingspeak.getLatestData();
+      
+      let newECGData = [];
+      if (data?.ecgData && data.ecgData.length > 0) {
+        // Clear any previous API error alerts
+        setAlerts(prev => prev.filter(alert => !alert.includes('Error fetching ECG data')));
+        newECGData = data.ecgData.map((val: number) => val || 0);
+      } else {
+        console.warn('No ECG data available from ThingSpeak, using synthetic data');
+        newECGData = generateECGPeak();
+      }
+
+      setEcgData(prev => {
+        const updatedData = [...prev, ...newECGData];
+        return updatedData.slice(-500); // Keep more points for medical accuracy
+      });
+
+      // Update heart rate if available
+      if (data?.heartRate) {
+        setHeartRate(Math.round(data.heartRate));
+      }
+
+      // Analyze for abnormalities
+      analyzeECG(newECGData);
+    } catch (error) {
+      console.error('Error fetching ECG data:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      
+      // Set specific error alerts based on the error type
+      const errorAlert = errorMessage.includes('unauthorized') || errorMessage.includes('invalid API key') ?
+        'Error: Invalid ThingSpeak API key. Please check your configuration.' :
+        errorMessage.includes('channel not found') ?
+        'Error: ThingSpeak channel not found. Please verify your channel ID.' :
+        `Error fetching ECG data: ${errorMessage}`;
+
+      setAlerts(prev => {
+        return prev.includes(errorAlert) ? prev : [...prev, errorAlert];
+      });
+
+      // Fallback to generated data
+      setEcgData(prev => {
+        const newData = [...prev, ...generateECGPeak()];
+        return newData.slice(-500);
+      });
+      setSignalQuality('Poor');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Generate a realistic ECG waveform pattern with medical accuracy
   const generateECGPeak = () => {
@@ -157,50 +328,6 @@ const ECGMonitor: React.FC = () => {
     for (let i = 0; i < 15; i++) points.push(0);
     
     return points;
-  };
-
-  const fetchECGData = async () => {
-    try {
-      const thingspeak = new ThingSpeakService(THINGSPEAK_CHANNEL_ID, THINGSPEAK_API_KEY);
-      const data = await thingspeak.getLatestData();
-      
-      let newECGData = [];
-      if (data?.ecgData && data.ecgData.length > 0) {
-        // Use real data if available
-        newECGData = data.ecgData.map(val => Number(val) || 0);
-      } else {
-        // Generate synthetic ECG data for demonstration
-        newECGData = generateECGPeak();
-      }
-
-      setEcgData(prev => {
-        const updatedData = [...prev, ...newECGData];
-        return updatedData.slice(-500); // Keep more points for medical accuracy
-      });
-
-      // Analyze for abnormalities
-      analyzeECG(newECGData);
-
-      // Update heart rate if available
-            // Update heart rate if available
-            if (data?.heartRate) {
-              setHeartRate(Math.round(data.heartRate));
-            } else {
-              // Simulate natural heart rate variability
-              setHeartRate(prev => Math.max(50, Math.min(120, prev + (Math.random() > 0.5 ? 1 : -1))));
-            }
-    } catch (error) {
-      console.error('Error fetching ECG data:', error);
-      // Fallback to generated data if API fails
-      setEcgData(prev => {
-        const newData = [...prev, ...generateECGPeak()];
-        return newData.slice(-500);
-      });
-      setSignalQuality('Poor');
-      setAlerts(['Warning: Connection to monitor lost. Showing simulated data.']);
-    } finally {
-      setLoading(false);
-    }
   };
 
   const analyzeECG = (data: number[]) => {
@@ -357,6 +484,7 @@ const ECGMonitor: React.FC = () => {
     ]
   };
 
+  // Chart configuration
   const chartOptions: ChartOptions<'line'> = {
     responsive: true,
     maintainAspectRatio: false,
@@ -365,54 +493,59 @@ const ECGMonitor: React.FC = () => {
     },
     scales: {
       y: {
-        type: 'linear',
+        type: 'linear' as const,
         min: -2,
         max: 3,
         grid: {
-          color: (ctx: any) => {
-            return ctx.tick.value === 0
-              ? (darkMode ? '#ffffff' : '#ff0000')
-              : (darkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 0, 0, 0.1)');
+          color: (ctx) => {
+            const value = ctx.tick.value as number;
+            if (value === 0) return darkMode ? '#ffffff' : '#ff0000';
+            return value % MAJOR_GRID_SIZE === 0
+                ? (darkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(255, 0, 0, 0.2)')
+                : (darkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 0, 0, 0.1)');
           },
-          lineWidth: (ctx: any) => ctx.tick.value === 0 ? 2 : 1,
+          lineWidth: (ctx) => {
+            const value = ctx.tick.value as number;
+            return value === 0 ? 2 : value % MAJOR_GRID_SIZE === 0 ? 1.5 : 0.5;
+          },
           drawTicks: true
         },
         title: {
           display: true,
           text: 'Voltage (mV)',
-          color: darkMode ? '#ffffff' : '#333333',
-          font: {
-            weight: 'bold'
-          }
+          color: darkMode ? '#ffffff' : '#333333'
         },
         ticks: {
-          color: darkMode ? '#ffffff' : '#333333',
           stepSize: 0.5,
-          callback: (value: number) => `${value} mV`
+          callback: function(this: Scale<CoreScaleOptions>, tickValue: string | number) {
+            return `${Number(tickValue)} mV`;
+          }
         }
       },
       x: {
-        type: 'linear',
+        type: 'linear' as const,
         grid: {
-          color: (ctx: any) => {
-            return (ctx.tick.value * 25) % 5 === 0
-              ? (darkMode ? '#ffffff' : '#ff0000')
-              : (darkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 0, 0, 0.1)');
+          color: (ctx) => {
+            const value = ctx.tick.value as number;
+            return value % MAJOR_GRID_SIZE === 0
+                ? (darkMode ? '#ffffff' : '#ff0000')
+                : (darkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(255, 0, 0, 0.1)');
           },
-          lineWidth: 1,
-          drawTicks: true
+          lineWidth: (ctx) => {
+            const value = ctx.tick.value as number;
+            return value % MAJOR_GRID_SIZE === 0 ? 1.5 : 0.5;
+          }
         },
         title: {
           display: true,
           text: 'Time (seconds)',
-          color: darkMode ? '#ffffff' : '#333333',
-          font: {
-            weight: 'bold'
-          }
+          color: darkMode ? '#ffffff' : '#333333'
         },
         ticks: {
-          color: darkMode ? '#ffffff' : '#333333',
-          callback: (value: number) => `${(value * 0.04).toFixed(1)}s`
+          stepSize: MAJOR_GRID_SIZE,
+          callback: function(this: Scale<CoreScaleOptions>, tickValue: string | number) {
+            return `${(Number(tickValue) / PAPER_SPEED).toFixed(1)}s`;
+          }
         }
       }
     },
@@ -423,8 +556,8 @@ const ECGMonitor: React.FC = () => {
       tooltip: {
         enabled: true,
         callbacks: {
-          label: (context: any) => {
-            return `${context.dataset.label}: ${context.parsed.y.toFixed(2)} mV`;
+          label(this: any, context: TooltipItem<'line'>) {
+            return `${context.dataset.label || ''}: ${context.parsed.y.toFixed(2)} mV`;
           }
         }
       }
@@ -466,14 +599,95 @@ const ECGMonitor: React.FC = () => {
     }
   }, [alerts, interpretation]);
 
+  // Add PDF generation functions
+  const drawGrid = (doc: jsPDF, pageWidth: number, pageHeight: number) => {
+    // Draw red grid lines (5mm spacing - standard ECG paper)
+    doc.setDrawColor(255, 0, 0);
+    doc.setLineWidth(0.1);
+
+    // Vertical lines
+    for (let x = 5; x < pageWidth; x += 5) {
+      doc.setLineWidth(x % 25 === 0 ? 0.3 : 0.1);
+      doc.line(x, 0, x, pageHeight);
+    }
+
+    // Horizontal lines
+    for (let y = 5; y < pageHeight; y += 5) {
+      doc.setLineWidth(y % 25 === 0 ? 0.3 : 0.1);
+      doc.line(0, y, pageWidth, y);
+    }
+  };
+
+  const addCalibrationMarkers = (doc: jsPDF) => {
+    doc.setDrawColor(0);
+    doc.setLineWidth(0.5);
+    // Add 1mV calibration marker
+    doc.line(10, 160, 10, 170);
+    doc.line(10, 165, 20, 165);
+    doc.setFontSize(8);
+    doc.text('1 mV', 22, 167);
+  };
+
+  const addReportHeader = (doc: jsPDF, metadata: PDFDocumentMetadata) => {
+    doc.setFontSize(16);
+    doc.text('ECG Report', 10, 10);
+    
+    doc.setFontSize(10);
+    doc.text(`Patient: ${metadata.patientName}`, 10, 20);
+    doc.text(`ID: ${metadata.patientId}`, 10, 25);
+    doc.text(`Date: ${metadata.date}`, 10, 30);
+    doc.text(`Heart Rate: ${metadata.heartRate} BPM`, 10, 35);
+    doc.text(`Interpretation: ${metadata.interpretation}`, 10, 40);
+  };
+
+  const downloadECG = () => {
+    const doc = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: 'a4'
+    });
+
+    // Get metadata
+    const metadata: PDFDocumentMetadata = {
+      patientName: 'Patient', // Replace with actual patient name if available
+      patientId: new Date().getTime().toString(), // Generate a unique ID
+      date: new Date().toLocaleString(),
+      heartRate,
+      interpretation: interpretation.label,
+      alerts
+    };
+
+    // Draw ECG grid
+    drawGrid(doc, 297, 210); // A4 landscape dimensions
+    addReportHeader(doc, metadata);
+    addCalibrationMarkers(doc);
+
+    // Draw ECG waveform
+    doc.setDrawColor(0);
+    doc.setLineWidth(0.5);
+    const scaling = 10; // Scale factor for ECG data
+    const yOffset = 100; // Vertical position on page
+    let lastX = 30;
+    let lastY = yOffset;
+
+    ecgData.forEach((point, index) => {
+      const x = 30 + (index * 0.5); // 25mm/s standard speed
+      const y = yOffset - (point * scaling);
+      if (index > 0) {
+        doc.line(lastX, lastY, x, y);
+      }
+      lastX = x;
+      lastY = y;
+    });
+
+    // Save the PDF
+    doc.save(`ECG_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
+  };
+
   return (
-    <div className={`min-h-screen p-6 ${darkMode ? 'dark bg-gray-900 text-white' : 'bg-white text-gray-900'}`}>
-      <h1 className="text-3xl font-bold mb-6">Medical ECG Monitor</h1>
-      <div className="flex items-center mb-2">
-        <Activity className="w-5 h-5 mr-2 text-blue-500" />
-        <span className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-          Lead II Configuration | 25mm/s | 10mm/mV
-        </span>
+    <div className={`min-h-screen p-6 ${darkMode ? 'dark bg-gray-900 text-white' : 'bg-white text-gray-900'}`} data-testid="ecg-monitor">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-3xl font-bold">Medical ECG Monitor</h1>
       </div>
       
       {loading ? (
@@ -482,6 +696,26 @@ const ECGMonitor: React.FC = () => {
         </div>
       ) : (
         <>
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex items-center">
+              <Activity className="w-5 h-5 mr-2 text-blue-500" />
+              <span className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                Lead II Configuration | 25mm/s | 10mm/mV
+              </span>
+            </div>
+            <button
+              onClick={downloadECG}
+              className={`flex items-center px-4 py-2 rounded-lg ${
+                darkMode
+                  ? 'bg-blue-600 hover:bg-blue-700'
+                  : 'bg-blue-500 hover:bg-blue-600'
+              } text-white transition-colors`}
+            >
+              <Download className="w-5 h-5 mr-2" />
+              Download ECG
+            </button>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
             {/* Heart Rate */}
             <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} p-4 rounded-lg shadow-sm border-l-4 ${
@@ -546,7 +780,7 @@ const ECGMonitor: React.FC = () => {
             darkMode ? 'border-gray-700' : 'border-gray-200'
           }`}>
             <div className="h-96"> {/* Medical standard height */}
-              <Line data={chartData} options={chartOptions} />
+              <Line ref={chartRef} data={chartData} options={chartOptions} />
             </div>
           </div>
 
@@ -587,7 +821,7 @@ const ECGMonitor: React.FC = () => {
                 Clinical Recommendations
               </h2>
               <ul className="space-y-3">
-                {interpretation.recommendations.map((rec, index) => (
+                {interpretation.recommendations.map((rec: string, index: number) => (
                   <li key={index} className="flex items-start">
                     <span className={`inline-block w-2 h-2 rounded-full mt-2 mr-2 ${
                       interpretation.color === 'red' ? 'bg-red-500' : 
@@ -609,7 +843,7 @@ const ECGMonitor: React.FC = () => {
                 Critical Alerts
               </h2>
               <div className="space-y-2">
-                {alerts.map((alert, index) => (
+                {alerts.map((alert: string, index: number) => (
                   <div 
                     key={index} 
                     className={`p-3 rounded-md flex items-start ${
@@ -617,6 +851,7 @@ const ECGMonitor: React.FC = () => {
                         (darkMode ? 'bg-red-900 bg-opacity-50' : 'bg-red-100 text-red-800') : 
                         (darkMode ? 'bg-yellow-900 bg-opacity-30' : 'bg-yellow-100 text-yellow-800')
                     }`}
+                    role="alert"
                   >
                     <AlertTriangle className={`w-4 h-4 mt-0.5 mr-2 ${
                       alert.startsWith('CRITICAL') ? 'text-red-500' : 'text-yellow-500'

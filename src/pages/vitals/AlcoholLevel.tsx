@@ -1,11 +1,9 @@
 import React, { useEffect } from 'react';
 import { Wine, ArrowUp, ArrowDown, Clock } from 'lucide-react';
 import { Line } from 'react-chartjs-2';
-import NotificationService from '../../services/notification';
+import { notificationService, type VitalAlert } from '../../services/notification';
 
 const AlcoholLevel: React.FC = () => {
-  const notificationService = new NotificationService();
-
   const chartData = {
     labels: Array.from({ length: 24 }, (_, i) => `${i}:00`),
     datasets: [{
@@ -46,19 +44,19 @@ const AlcoholLevel: React.FC = () => {
       const user = JSON.parse(localStorage.getItem('user') || '{}');
       if (!user.phone) return;
 
-      const alerts = [];
+      const alerts: VitalAlert[] = [];
       
       if (level > 0.15) {
         alerts.push({
           type: 'critical',
-          message: 'Dangerously High Alcohol Level',
+          message: 'CRITICAL: Dangerously High Alcohol Level - Immediate Action Required',
           value: level.toFixed(2),
           unit: '%'
         });
       } else if (level > 0.08) {
         alerts.push({
-          type: 'warning',
-          message: 'High Alcohol Level - Above Legal Limit',
+          type: 'critical',
+          message: 'CRITICAL: High Alcohol Level - Above Legal Limit',
           value: level.toFixed(2),
           unit: '%'
         });

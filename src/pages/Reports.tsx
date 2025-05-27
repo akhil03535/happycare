@@ -3,7 +3,7 @@ import { Filter, FileCheck, Bell, AlertTriangle, Activity, Lock, Check } from 'l
 import { useStripe, useElements, CardElement, Elements } from '@stripe/react-stripe-js';
 import { loadStripe } from '@stripe/stripe-js';
 import { ThingSpeakService, type ThingSpeakData } from '../services/thingspeak';
-import NotificationService from '../services/notification';
+import { notificationService, type VitalAlert } from '../services/notification';
 import { useTheme } from '../contexts/ThemeContext';
 import toast from 'react-hot-toast';
 import jsPDF from 'jspdf';
@@ -22,6 +22,15 @@ try {
   console.error('Failed to initialize Stripe:', error);
   toast.error('Payment system initialization failed');
 }
+
+// Only send critical and warning alerts to notification service
+const toVitalAlert = (alert: Alert): VitalAlert => ({
+  type: alert.type === 'info' ? 'warning' : alert.type,
+  message: alert.message,
+  value: alert.value,
+  unit: alert.unit,
+  timestamp: alert.timestamp.toLocaleTimeString()
+});
 
 interface SensorData extends ThingSpeakData {
   bloodPressure: {
@@ -211,7 +220,7 @@ const Reports: React.FC = () => {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [isPremium, setIsPremium] = useState(false);
   const { darkMode } = useTheme();
-  const notificationService = new NotificationService();
+  // Using the singleton instance
 
   const checkPremiumStatus = (email: string) => {
     const premiumUsers = JSON.parse(localStorage.getItem('premiumUsers') || '{}');
@@ -424,10 +433,11 @@ const Reports: React.FC = () => {
           // Send SMS for critical alerts
           const user = JSON.parse(localStorage.getItem('user') || '{}');
           if (user.phone) {
-            const alerts = newAlerts.filter(alert => alert.type === 'critical');
+            const alerts = newAlerts.filter(alert => alert.type === 'critical' || alert.type === 'warning');
             if (alerts.length > 0) {
               try {
-                const message = notificationService.formatVitalAlerts(alerts);
+                const vitalAlerts = alerts.map(toVitalAlert);
+                const message = notificationService.formatVitalAlerts(vitalAlerts);
                 await notificationService.sendSMSAlert(user.phone, message);
                 toast.success('Critical alerts notifications sent');
               } catch (error) {

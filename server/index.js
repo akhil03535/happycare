@@ -101,46 +101,131 @@ setInterval(() => {
   }
 }, 60000); // Check every minute
 
-// SMS Alert Endpoint
-app.post('/api/send-sms', async (req, res) => {
+// Message status webhook
+app.post('/message-status', (req, res) => {
+  const messageSid = req.body.MessageSid;
+  const messageStatus = req.body.MessageStatus;
+
+  console.log('Message Status Update:', {
+    messageSid,
+    status: messageStatus,
+    timestamp: new Date().toISOString()
+  });
+
+  res.sendStatus(200);
+});
+
+// Verify Twilio credentials on startup
+console.log('Verifying Twilio configuration...');
+console.log('Account SID:', process.env.TWILIO_ACCOUNT_SID?.substring(0, 8) + '...');
+console.log('Auth Token:', process.env.TWILIO_AUTH_TOKEN ? 'Present' : 'Missing');
+console.log('From Phone:', process.env.TWILIO_PHONE_NUMBER);
+
+// Message status endpoint
+app.get('/api/message-status/:messageId', async (req, res) => {
   try {
-    const { to, message } = req.body;
-    
-    // Reset counts if it's a new day
-    const today = new Date().toDateString();
-    if (today !== messageTracker.lastReset) {
-      messageTracker.counts = {};
-      messageTracker.lastReset = today;
-    }
+    const { messageId } = req.params;
+    console.log('Checking status for message:', messageId);
 
-    // Check message count for this number
-    messageTracker.counts[to] = messageTracker.counts[to] || 0;
-    if (messageTracker.counts[to] >= messageTracker.MAX_DAILY_MESSAGES) {
-      return res.status(429).json({
-        success: false,
-        error: 'Daily message limit reached',
-        remainingMessages: 0,
-        retryAfter: new Date(new Date().setHours(24, 0, 0, 0)).toISOString()
-      });
-    }
-
-    // Send message
-    await twilioClient.messages.create({
-      body: message,
-      to,
-      from: process.env.TWILIO_PHONE_NUMBER
+    const message = await twilioClient.messages(messageId).fetch();
+    console.log('Message status:', {
+      sid: message.sid,
+      status: message.status,
+      errorCode: message.errorCode,
+      errorMessage: message.errorMessage
     });
-
-    // Update count on success
-    messageTracker.counts[to]++;
 
     res.json({
       success: true,
-      remainingMessages: messageTracker.MAX_DAILY_MESSAGES - messageTracker.counts[to]
+      status: message.status,
+      errorCode: message.errorCode,
+      errorMessage: message.errorMessage,
+      dateCreated: message.dateCreated,
+      dateUpdated: message.dateUpdated
     });
   } catch (error) {
-    console.error('Error sending SMS:', error);
-    res.status(500).json({ message: 'Error sending SMS', error: error.message });
+    console.error('Error fetching message status:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Enhanced SMS endpoint with improved error handling
+app.post('/api/send-sms', async (req, res) => {
+  console.log('\n--- New SMS Request ---');
+  console.log('Time:', new Date().toISOString());
+  console.log('Request body:', req.body);
+
+  try {
+    const { to, message } = req.body;
+
+    if (!to || !message) {
+      throw new Error('Phone number and message are required');
+    }
+
+    // Check daily message limit
+    const phoneNumber = to.startsWith('+') ? to : (to.length === 10 ? `+91${to}` : `+${to}`);
+    if (messageTracker.counts[phoneNumber] >= messageTracker.MAX_DAILY_MESSAGES) {
+      return res.status(429).json({
+        success: false,
+        error: 'Daily message limit reached',
+        code: 'DAILY_LIMIT_EXCEEDED',
+        details: `Maximum ${messageTracker.MAX_DAILY_MESSAGES} messages per day allowed`
+      });
+    }
+
+    // Format the phone number if needed
+    console.log('Sending message to:', phoneNumber);
+    console.log('From:', process.env.TWILIO_PHONE_NUMBER);
+    console.log('Message length:', message.length);
+
+    // Send message
+    const twilioMessage = await twilioClient.messages.create({
+      body: message,
+      from: process.env.TWILIO_PHONE_NUMBER,
+      to: phoneNumber,
+      validateBeforeSend: true
+    });
+
+    // Update message count
+    messageTracker.counts[phoneNumber] = (messageTracker.counts[phoneNumber] || 0) + 1;
+
+    console.log('Message sent successfully!');
+    console.log('Message details:', {
+      sid: twilioMessage.sid,
+      status: twilioMessage.status,
+      direction: twilioMessage.direction,
+      errorCode: twilioMessage.errorCode,
+      errorMessage: twilioMessage.errorMessage
+    });
+
+    res.json({
+      success: true,
+      messageId: twilioMessage.sid,
+      status: twilioMessage.status,
+      errorCode: twilioMessage.errorCode,
+      errorMessage: twilioMessage.errorMessage,
+      remainingMessages: messageTracker.MAX_DAILY_MESSAGES - messageTracker.counts[phoneNumber]
+    });
+
+  } catch (error) {
+    console.error('Error in /api/send-sms:', error);
+    
+    // Check for specific Twilio error codes
+    const twilioError = error.code ? error : (error.original || {});
+    const statusCode = twilioError.code === 63038 ? 429 : 500; // Use 429 Too Many Requests for rate limiting
+    
+    const errorResponse = {
+      success: false,
+      error: error.message,
+      code: twilioError.code,
+      details: twilioError.moreInfo || twilioError.details
+    };
+
+    console.error('Error details:', errorResponse);
+    res.status(statusCode).json(errorResponse);
   }
 });
 

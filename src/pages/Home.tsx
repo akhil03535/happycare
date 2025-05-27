@@ -44,12 +44,32 @@ const Home: React.FC = () => {
     }
 
     const user = JSON.parse(userData);
-    if (!user.thingspeakChannel || !user.thingspeakApiKey) {
+    const channelId = (user.thingspeakChannelId || user.thingspeakChannel)?.trim();
+    const apiKey = user.thingspeakApiKey?.trim();
+    
+    if (!channelId || !apiKey) {
       toast.error('Please configure your ThingSpeak settings in Profile');
+      setError('ThingSpeak configuration is missing. Please set up your channel ID and API key in your profile.');
       return;
     }
 
-    const thingspeak = new ThingSpeakService(user.thingspeakChannel, user.thingspeakApiKey);
+    // Validate API key format
+    if (!/^[A-Z0-9]{16}$/i.test(apiKey)) {
+      const error = 'Invalid ThingSpeak API key format. Please check your configuration.';
+      toast.error(error);
+      setError(error);
+      return;
+    }
+
+    // Validate channel ID is numeric
+    if (!/^\d+$/.test(channelId)) {
+      const error = 'Invalid ThingSpeak channel ID. Please check your configuration.';
+      toast.error(error);
+      setError(error);
+      return;
+    }
+
+    const thingspeak = new ThingSpeakService(channelId, apiKey);
 
     const fetchData = async () => {
       try {

@@ -1,11 +1,9 @@
 import React, { useEffect } from 'react';
 import { Activity, ArrowUp, ArrowDown, Clock } from 'lucide-react';
 import { Line } from 'react-chartjs-2';
-import NotificationService from '../../services/notification';
+import { notificationService, type VitalAlert } from '../../services/notification';
 
 const SpO2: React.FC = () => {
-  const notificationService = new NotificationService();
-
   const chartData = {
     labels: Array.from({ length: 24 }, (_, i) => `${i}:00`),
     datasets: [{
@@ -46,12 +44,19 @@ const SpO2: React.FC = () => {
       const user = JSON.parse(localStorage.getItem('user') || '{}');
       if (!user.phone) return;
 
-      const alerts = [];
+      const alerts: VitalAlert[] = [];
       
       if (level < 90) {
         alerts.push({
           type: 'critical',
-          message: 'Severe Low Oxygen Saturation',
+          message: 'CRITICAL: Severe Low Oxygen Saturation - Emergency',
+          value: level,
+          unit: '%'
+        });
+      } else if (level < 92) {
+        alerts.push({
+          type: 'critical',
+          message: 'CRITICAL: Low Oxygen Saturation - Urgent Action Required',
           value: level,
           unit: '%'
         });

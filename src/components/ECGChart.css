@@ -1,6 +1,63 @@
+.ecg-monitor {
+  background: var(--chart-bg, #000000);
+  border-radius: 8px;
+  padding: 1rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
 .ecg-chart-container {
-  height: 300px;
   position: relative;
+  height: 400px; /* Standard medical monitor height */
   width: 100%;
+  background-color: var(--chart-bg, #000000);
+  border: 2px solid var(--chart-border, #333333);
+  border-radius: 4px;
   padding: 10px;
+  overflow: hidden;
+}
+
+.ecg-chart-container::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: 
+    linear-gradient(var(--grid-color, rgba(255, 0, 0, 0.1)) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-color, rgba(255, 0, 0, 0.1)) 1px, transparent 1px);
+  background-size: 20px 20px; /* Standard ECG paper grid size */
+  pointer-events: none;
+  z-index: 1;
+}
+
+.ecg-chart-container::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: 
+    linear-gradient(var(--grid-color-bold, rgba(255, 0, 0, 0.2)) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-color-bold, rgba(255, 0, 0, 0.2)) 1px, transparent 1px);
+  background-size: 100px 100px; /* 5x5 standard grid */
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Dark mode styles */
+.dark .ecg-chart-container {
+  --chart-bg: #000000;
+  --chart-border: #333333;
+  --grid-color: rgba(255, 255, 255, 0.1);
+  --grid-color-bold: rgba(255, 255, 255, 0.2);
+}
+
+/* Light mode styles */
+.light .ecg-chart-container {
+  --chart-bg: #ffffff;
+  --chart-border: #cccccc;
+  --grid-color: rgba(255, 0, 0, 0.1);
+  --grid-color-bold: rgba(255, 0, 0, 0.2);
 }

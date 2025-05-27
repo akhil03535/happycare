@@ -18,7 +18,7 @@ export interface ECGAlert {
 class NotificationService {
   private twilioEndpoint = 'http://localhost:5000/api/send-sms';
   private messageCount: { [key: string]: number } = {};
-  private readonly MAX_DAILY_MESSAGES = 8; // Keep one message below limit for emergencies
+  private readonly MAX_DAILY_MESSAGES = 15; // Keep one message below limit for emergencies
   private lastReset = new Date().toDateString();
 
   constructor() {
@@ -234,4 +234,5 @@ class NotificationService {
   }
 }
 
-export default NotificationService;
+// Create and export a singleton instance
+export const notificationService = new NotificationService();

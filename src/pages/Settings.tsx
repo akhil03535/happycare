@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Bell, Shield, Moon, Sun, Wifi, Save } from 'lucide-react';
+import { Wifi, Save } from 'lucide-react';
 import { Settings as SettingsIcon } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -96,13 +96,14 @@ const SettingsPage: React.FC = () => {
       localStorage.setItem('notifications', JSON.stringify(notifications));
       localStorage.setItem('thresholds', JSON.stringify(thresholds));
 
-      // Update user context with ThingSpeak credentials
-      if (user && updateUser) {
-        const updatedUser = await updateUser({
+      // Update user data with ThingSpeak credentials
+      if (user) {
+        const updatedUser = {
           ...user,
           thingspeakChannelId: thingspeakConfig.channelId,
           thingspeakApiKey: thingspeakConfig.apiKey
-        });
+        };
+        localStorage.setItem('user', JSON.stringify(updatedUser));
 
         // Verify the update was successful
         if (!updatedUser.thingspeakChannelId || !updatedUser.thingspeakApiKey) {

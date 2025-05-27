@@ -1,10 +1,9 @@
 import React, { useEffect } from 'react';
 import { Heart, ArrowUp, ArrowDown, Clock } from 'lucide-react';
 import { Line } from 'react-chartjs-2';
-import NotificationService from '../../services/notification';
+import { notificationService, type VitalAlert } from '../../services/notification';
 
 const HeartRate: React.FC = () => {
-  const notificationService = new NotificationService();
 
   const chartData = {
     labels: Array.from({ length: 24 }, (_, i) => `${i}:00`),
@@ -46,26 +45,44 @@ const HeartRate: React.FC = () => {
       const user = JSON.parse(localStorage.getItem('user') || '{}');
       if (!user.phone) return;
 
-      const alerts = [];
+      const alerts: VitalAlert[] = [];
       
-      if (bpm > 120) {
+      if (bpm > 150) {
         alerts.push({
           type: 'critical',
-          message: 'Dangerously High Heart Rate',
+          message: 'CRITICAL: Extremely High Heart Rate - Emergency',
           value: bpm,
-          unit: 'BPM'
+          unit: 'BPM',
+          timestamp: new Date().toLocaleTimeString()
+        });
+      } else if (bpm > 120) {
+        alerts.push({
+          type: 'critical',
+          message: 'CRITICAL: Dangerously High Heart Rate',
+          value: bpm,
+          unit: 'BPM',
+          timestamp: new Date().toLocaleTimeString()
         });
       } else if (bpm > 100) {
         alerts.push({
           type: 'warning',
           message: 'Elevated Heart Rate',
           value: bpm,
-          unit: 'BPM'
+          unit: 'BPM',
+          timestamp: new Date().toLocaleTimeString()
+        });
+      } else if (bpm < 40) {
+        alerts.push({
+          type: 'critical',
+          message: 'CRITICAL: Extremely Low Heart Rate - Emergency',
+          value: bpm,
+          unit: 'BPM',
+          timestamp: new Date().toLocaleTimeString()
         });
       } else if (bpm < 50) {
         alerts.push({
           type: 'critical',
-          message: 'Dangerously Low Heart Rate',
+          message: 'CRITICAL: Dangerously Low Heart Rate',
           value: bpm,
           unit: 'BPM'
         });

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { PersonStanding } from 'lucide-react';
-import NotificationService from '../../services/notification';
+import { notificationService } from '../../services/notification';
 import type { VitalAlert } from '../../services/notification';
 
 const FallDetection: React.FC = () => {
@@ -8,7 +8,7 @@ const FallDetection: React.FC = () => {
     detected: false,
     timestamp: new Date(),
   });
-  const notificationService = new NotificationService();
+  // Using the singleton instance
 
   useEffect(() => {
     const handleFallDetection = async (detected: boolean) => {
@@ -20,9 +20,10 @@ const FallDetection: React.FC = () => {
       const alerts: VitalAlert[] = [
         {
           type: 'critical',
-          message: 'Fall Detected - Emergency',
+          message: 'CRITICAL: Fall Detected - EMERGENCY - Immediate Assistance Required',
           value: 'EMERGENCY',
           unit: '',
+          timestamp: new Date().toLocaleTimeString()
         },
       ];
 
