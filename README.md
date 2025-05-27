@@ -28,6 +28,7 @@ A comprehensive health monitoring system that integrates IoT devices with real-t
 - Node.js (v16 or higher)
 - Python 3.8+
 - npm or yarn
+- MongoDB Atlas account (for database)
 
 ### Installation
 
@@ -47,7 +48,14 @@ pip install -r server/requirements.txt
 ```
 
 3. Configure environment variables
-- Create a `.env` file in the root directory
+- Copy `.env.example` to create `.env` file in the root directory
+- Set up MongoDB Atlas:
+  1. Create a MongoDB Atlas account if you don't have one
+  2. Create a new cluster
+  3. Click "Connect" on your cluster
+  4. Choose "Connect your application"
+  5. Copy the connection string
+  6. Replace `<username>`, `<password>` in the MONGODB_URI with your credentials
 - Add your ThingSpeak and Twilio credentials
 
 4. Start the development servers
@@ -99,3 +107,34 @@ This project is licensed under the MIT License - see the LICENSE.md file for det
 - ThingSpeak for IoT data handling
 - Twilio for SMS capabilities
 - Chart.js for visualization
+
+## Deployment
+
+### Vercel Deployment
+
+1. Push your code to GitHub
+2. Create a new project in Vercel
+3. Import your GitHub repository
+4. Configure environment variables in Vercel:
+   - Go to Project Settings > Environment Variables
+   - Add all variables from your `.env` file
+   - Make sure to use the MongoDB Atlas connection string
+5. Deploy the project
+
+Note: Make sure your MongoDB Atlas cluster's Network Access settings allow connections from anywhere (0.0.0.0/0) or from Vercel's IP range.
+
+### Database Configuration
+
+The project uses MongoDB Atlas as the cloud database service. To set up:
+
+1. Create a MongoDB Atlas account
+2. Create a new cluster (the free tier is sufficient for development)
+3. Set up database access:
+   - Create a database user with appropriate permissions
+   - Add your IP address to the IP Access List
+4. Get your connection string:
+   - Click "Connect" on your cluster
+   - Choose "Connect your application"
+   - Copy the connection string
+   - Replace `<username>`, `<password>` with your database user credentials
+5. Update your environment variables with the connection string
