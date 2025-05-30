@@ -20,7 +20,7 @@ const Login: React.FC = () => {
     try {
       setIsLoading(true);
       setError('');
-      const response = await axios.post('http://localhost:5000/api/login', data);
+      const response = await axios.post('https://happycare-ru73.onrender.com/api/login', data);
       const { token, user } = response.data;
       
       // Store token and user data

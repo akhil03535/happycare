@@ -24,7 +24,8 @@ const SignUp: React.FC = () => {
   const onSubmit = async (data: SignUpForm) => {
     try {
       setIsLoading(true);
-      const response = await axios.post('http://localhost:5000/api/signup', {
+      const response = await axios.post(`${import.meta.env.VITE_BACKEND_URL}/api/signup`, {
+
         name: data.name,
         email: data.email,
         password: data.password,
