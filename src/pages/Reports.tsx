@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Filter, FileCheck, Bell, AlertTriangle, Activity, Lock, Check } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Filter, FileCheck, Bell, AlertTriangle, Activity, Lock, Check, RefreshCw } from 'lucide-react';
 import { useStripe, useElements, CardElement, Elements } from '@stripe/react-stripe-js';
 import { loadStripe } from '@stripe/stripe-js';
 import { ThingSpeakService, type ThingSpeakData } from '../services/thingspeak';
@@ -23,7 +23,6 @@ try {
   toast.error('Payment system initialization failed');
 }
 
-// Only send critical and warning alerts to notification service
 const toVitalAlert = (alert: Alert): VitalAlert => ({
   type: alert.type === 'info' ? 'warning' : alert.type,
   message: alert.message,
@@ -112,7 +111,6 @@ const CheckoutForm = ({ onSuccess, userEmail }: {
       }
 
       if (paymentIntent?.status === 'succeeded') {
-        // Store premium status with user's email as key
         const premiumUsers = JSON.parse(localStorage.getItem('premiumUsers') || '{}');
         premiumUsers[userEmail] = true;
         localStorage.setItem('premiumUsers', JSON.stringify(premiumUsers));
@@ -219,17 +217,44 @@ const Reports: React.FC = () => {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [isPremium, setIsPremium] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const { darkMode } = useTheme();
-  // Using the singleton instance
 
-  const checkPremiumStatus = (email: string) => {
-    const premiumUsers = JSON.parse(localStorage.getItem('premiumUsers') || '{}');
-    return premiumUsers[email] === true;
+  const checkPremiumStatus = (email: string): boolean => {
+    try {
+      const premiumUsers = JSON.parse(localStorage.getItem('premiumUsers') || '{}');
+      return premiumUsers[email] === true;
+    } catch {
+      return false;
+    }
+  };
+
+  const validateSensorData = (item: any): SensorData | null => {
+    if (!item || typeof item !== 'object') return null;
+    
+    try {
+      return {
+        ...item,
+        temperature: Number(item.field1) || 0,
+        heartRate: Number(item.field2) || 0,
+        spo2: Number(item.field5) || 0,
+        fallDetection: item.field6 === '1',
+        alcoholLevel: Number(item.field7) || 0,
+        bloodPressure: {
+          systolic: Number(item.field3) || 120,
+          diastolic: Number(item.field4) || 80
+        }
+      };
+    } catch {
+      return null;
+    }
   };
 
   const generateAlerts = (data: SensorData): Alert[] => {
     const alerts: Alert[] = [];
     
+    if (!data) return alerts;
+
     // Temperature alerts
     if (data.temperature > 37.5) {
       alerts.push({
@@ -280,7 +305,7 @@ const Reports: React.FC = () => {
     }
 
     // Fall detection alert
-    if (data.fallDetection === 1) {
+    if (data.fallDetection) {
       alerts.push({
         type: 'critical',
         message: 'Fall Detected',
@@ -291,7 +316,7 @@ const Reports: React.FC = () => {
     }
 
     // Blood pressure alerts
-    const { systolic, diastolic } = data.bloodPressure;
+    const { systolic, diastolic } = data.bloodPressure || { systolic: 120, diastolic: 80 };
     if (systolic > 140 || diastolic > 90) {
       alerts.push({
         type: (systolic > 180 || diastolic > 120) ? 'critical' : 'warning',
@@ -400,65 +425,70 @@ const Reports: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const userData = localStorage.getItem('user');
-        if (!userData) return;
+  const fetchData = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
 
-        const user = JSON.parse(userData);
-        setIsPremium(checkPremiumStatus(user.email));
+      const userData = localStorage.getItem('user');
+      if (!userData) {
+        throw new Error('User data not found. Please login again.');
+      }
 
-        const thingspeak = new ThingSpeakService(user.thingspeakChannel, user.thingspeakApiKey);
+      const user = JSON.parse(userData);
+      setIsPremium(checkPremiumStatus(user.email));
 
-        const hours = dateRange === '24h' ? 24 : dateRange === '7d' ? 168 : 720;
-        const data = await thingspeak.getHistoricalData({ hours });
-        
-        // Transform ThingSpeakData to SensorData
-        const transformedData: SensorData[] = data.map(item => ({
-          ...item,
-          bloodPressure: {
-            systolic: 120, // Default values since ThingSpeak doesn't provide blood pressure
-            diastolic: 80
-          }
-        }));
-        
-        setSensorData(transformedData);
+      if (!user.thingspeakChannel || !user.thingspeakApiKey) {
+        throw new Error('ThingSpeak credentials not configured');
+      }
 
-        if (transformedData.length > 0) {
-          const latestData = transformedData[transformedData.length - 1];
-          const newAlerts = generateAlerts(latestData);
-          setAlerts(newAlerts);
+      const thingspeak = new ThingSpeakService(user.thingspeakChannel, user.thingspeakApiKey);
+      const hours = dateRange === '24h' ? 24 : dateRange === '7d' ? 168 : 720;
+      const data = await thingspeak.getHistoricalData({ hours });
+      
+      const transformedData = data
+        .map(validateSensorData)
+        .filter(Boolean) as SensorData[];
+      
+      setSensorData(transformedData);
 
-          // Send SMS for critical alerts
-          const user = JSON.parse(localStorage.getItem('user') || '{}');
-          if (user.phone) {
-            const alerts = newAlerts.filter(alert => alert.type === 'critical' || alert.type === 'warning');
-            if (alerts.length > 0) {
-              try {
-                const vitalAlerts = alerts.map(toVitalAlert);
-                const message = notificationService.formatVitalAlerts(vitalAlerts);
-                await notificationService.sendSMSAlert(user.phone, message);
-                toast.success('Critical alerts notifications sent');
-              } catch (error) {
-                console.error('Failed to send alert notifications:', error);
-                toast.error('Failed to send notifications');
-              }
+      if (transformedData.length > 0) {
+        const latestData = transformedData[transformedData.length - 1];
+        const newAlerts = generateAlerts(latestData);
+        setAlerts(newAlerts);
+
+        // Send SMS for critical alerts
+        if (user.phone) {
+          const vitalAlerts = newAlerts
+            .filter(alert => alert.type === 'critical' || alert.type === 'warning')
+            .map(toVitalAlert);
+          
+          if (vitalAlerts.length > 0) {
+            try {
+              const message = notificationService.formatVitalAlerts(vitalAlerts);
+              await notificationService.sendSMSAlert(user.phone, message);
+              toast.success('Critical alerts notifications sent');
+            } catch (error) {
+              console.error('Failed to send alert notifications:', error);
+              toast.error('Failed to send notifications');
             }
           }
         }
-      } catch (error) {
-        console.error('Error fetching sensor data:', error);
-        toast.error('Failed to fetch sensor data');
-      } finally {
-        setLoading(false);
       }
-    };
+    } catch (err: any) {
+      console.error('Error fetching sensor data:', err);
+      setError(err.message || 'Failed to fetch sensor data');
+      toast.error(err.message || 'Failed to fetch sensor data');
+    } finally {
+      setLoading(false);
+    }
+  }, [dateRange]);
 
+  useEffect(() => {
     fetchData();
     const interval = setInterval(fetchData, 300000);
     return () => clearInterval(interval);
-  }, [dateRange]);
+  }, [fetchData]);
 
   const handlePaymentSuccess = () => {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -501,6 +531,20 @@ const Reports: React.FC = () => {
             </select>
           </div>
           <button
+            onClick={() => fetchData()}
+            disabled={loading}
+            className={`px-3 py-2 rounded-md flex items-center ${
+              loading 
+                ? 'bg-gray-400' 
+                : darkMode 
+                  ? 'bg-gray-700 hover:bg-gray-600' 
+                  : 'bg-gray-200 hover:bg-gray-300'
+            }`}
+          >
+            <RefreshCw className={`w-5 h-5 mr-2 ${loading ? 'animate-spin' : ''}`} />
+            {loading ? 'Refreshing...' : 'Refresh'}
+          </button>
+          <button
             onClick={downloadPDF}
             className={`flex items-center px-4 py-2 rounded-md ${
               isPremium
@@ -532,6 +576,23 @@ const Reports: React.FC = () => {
         </div>
       )}
 
+      {error && (
+        <div className={`p-4 mb-4 rounded-lg ${
+          darkMode ? 'bg-red-900 text-red-100' : 'bg-red-100 text-red-800'
+        }`}>
+          <div className="flex items-center">
+            <AlertTriangle className="w-5 h-5 mr-2" />
+            <span>{error}</span>
+          </div>
+          <button 
+            onClick={() => setError(null)}
+            className="mt-2 text-sm underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center h-64">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
@@ -541,37 +602,42 @@ const Reports: React.FC = () => {
           <div className={`p-6 rounded-lg shadow-sm ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
             <h2 className="text-xl font-semibold mb-4">Recent Alerts</h2>
             <div className="space-y-4">
-              {alerts.map((alert, index) => (
-                <div
-                  key={index}
-                  className={`flex items-center justify-between p-4 rounded-lg ${
-                    alert.type === 'critical'
-                      ? 'bg-red-50 text-red-700 dark:bg-red-900 dark:text-red-100'
-                      : alert.type === 'warning'
-                      ? 'bg-yellow-50 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-100'
-                      : 'bg-blue-50 text-blue-700 dark:bg-blue-900 dark:text-blue-100'
-                  }`}
-                >
-                  <div className="flex items-center">
-                    {alert.type === 'critical' ? (
-                      <AlertTriangle className="w-5 h-5 text-red-500" />
-                    ) : alert.type === 'warning' ? (
-                      <Bell className="w-5 h-5 text-yellow-500" />
-                    ) : (
-                      <Activity className="w-5 h-5 text-blue-500" />
-                    )}
-                    <span className="ml-3">{alert.message}</span>
+              {alerts.length > 0 ? (
+                alerts.map((alert, index) => (
+                  <div
+                    key={index}
+                    className={`flex items-center justify-between p-4 rounded-lg ${
+                      alert.type === 'critical'
+                        ? 'bg-red-50 text-red-700 dark:bg-red-900 dark:text-red-100'
+                        : alert.type === 'warning'
+                        ? 'bg-yellow-50 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-100'
+                        : 'bg-blue-50 text-blue-700 dark:bg-blue-900 dark:text-blue-100'
+                    }`}
+                  >
+                    <div className="flex items-center">
+                      {alert.type === 'critical' ? (
+                        <AlertTriangle className="w-5 h-5 text-red-500" />
+                      ) : alert.type === 'warning' ? (
+                        <Bell className="w-5 h-5 text-yellow-500" />
+                      ) : (
+                        <Activity className="w-5 h-5 text-blue-500" />
+                      )}
+                      <span className="ml-3">{alert.message}</span>
+                    </div>
+                    <div className="flex items-center">
+                      <span className="mr-4">{alert.value}{alert.unit}</span>
+                      <span className="text-sm opacity-75">
+                        {new Date(alert.timestamp).toLocaleTimeString()}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center">
-                    <span className="mr-4">{alert.value}{alert.unit}</span>
-                    <span className="text-sm opacity-75">
-                      {new Date(alert.timestamp).toLocaleTimeString()}
-                    </span>
-                  </div>
+                ))
+              ) : (
+                <div className={`p-4 text-center rounded-lg ${
+                  darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-100 text-gray-500'
+                }`}>
+                  No alerts to display
                 </div>
-              ))}
-              {alerts.length === 0 && (
-                <p className="text-center text-gray-500">No alerts to display</p>
               )}
             </div>
           </div>
@@ -591,33 +657,38 @@ const Reports: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                  {sensorData.slice(0, 10).map((reading, index) => (
-                    <tr key={index} className={darkMode ? 'bg-gray-800' : 'bg-white'}>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm">
-                        {new Date(reading.timestamp).toLocaleTimeString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm">
-                        {reading.temperature.toFixed(1)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm">
-                        {reading.heartRate}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm">
-                        {reading.spo2}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm">
-                        {reading.bloodPressure.systolic}/{reading.bloodPressure.diastolic}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm">
-                        {reading.fallDetection ? 'Yes' : 'No'}
+                  {sensorData.length > 0 ? (
+                    sensorData.slice(0, 10).map((reading, index) => (
+                      <tr key={index} className={darkMode ? 'bg-gray-800 hover:bg-gray-700' : 'bg-white hover:bg-gray-50'}>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {new Date(reading.timestamp).toLocaleTimeString()}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {reading.temperature.toFixed(1)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {reading.heartRate}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {reading.spo2}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {reading.bloodPressure.systolic}/{reading.bloodPressure.diastolic}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          {reading.fallDetection ? 'Yes' : 'No'}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-4 text-center text-sm text-gray-500">
+                        No sensor data available
                       </td>
                     </tr>
-                  ))}
+                  )}
                 </tbody>
               </table>
-              {sensorData.length === 0 && (
-                <p className="text-center text-gray-500 py-4">No sensor data available</p>
-              )}
             </div>
           </div>
         </>

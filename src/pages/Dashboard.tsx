@@ -38,7 +38,7 @@ const Dashboard: React.FC = () => {
               <Thermometer className="w-8 h-8 text-orange-500" />
             </div>
             <div className="ml-4">
-              <p className="text-sm text-gray-500">Temperature</p>
+              <p className="text-sm text-gray-500">Spo2</p>
               <p className="text-2xl font-semibold">37.2°C</p>
             </div>
           </div>
@@ -57,7 +57,7 @@ const Dashboard: React.FC = () => {
               <Activity className="w-8 h-8 text-blue-500" />
             </div>
             <div className="ml-4">
-              <p className="text-sm text-gray-500">SpO2</p>
+              <p className="text-sm text-gray-500">ECG</p>
               <p className="text-2xl font-semibold">98%</p>
             </div>
           </div>

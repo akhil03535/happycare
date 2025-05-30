@@ -4,6 +4,7 @@ import { Heart, Zap, AlertTriangle, Activity, Info, Download } from 'lucide-reac
 import { useTheme } from '../contexts/ThemeContext';
 import { ThingSpeakService } from '../services/thingspeak';
 import { notificationService } from '../services/notification';
+import { jsPDF } from 'jspdf';
 import type { ChartArea, Scale } from 'chart.js';
 import {
     Chart as ChartJS,
@@ -648,9 +649,10 @@ const ECGMonitor: React.FC = () => {
     });
 
     // Get metadata
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
     const metadata: PDFDocumentMetadata = {
-      patientName: 'Patient', // Replace with actual patient name if available
-      patientId: new Date().getTime().toString(), // Generate a unique ID
+      patientName: user.name || 'Patient',
+      patientId: user.id || new Date().getTime().toString(),
       date: new Date().toLocaleString(),
       heartRate,
       interpretation: interpretation.label,
@@ -679,6 +681,30 @@ const ECGMonitor: React.FC = () => {
       lastX = x;
       lastY = y;
     });
+
+    // Add interpretation details
+    doc.setFontSize(12);
+    doc.text('ECG Interpretation:', 10, 180);
+    doc.setFontSize(10);
+    doc.text(interpretation.description, 10, 185);
+    
+    // Add recommendations
+    doc.setFontSize(12);
+    doc.text('Clinical Recommendations:', 150, 180);
+    doc.setFontSize(10);
+    interpretation.recommendations.forEach((rec, i) => {
+      doc.text(`• ${rec}`, 150, 185 + (i * 5));
+    });
+
+    // Add alerts if any
+    if (alerts.length > 0) {
+      doc.setFontSize(12);
+      doc.text('Alerts:', 10, 200);
+      doc.setFontSize(10);
+      alerts.forEach((alert, i) => {
+        doc.text(`• ${alert}`, 10, 205 + (i * 5));
+      });
+    }
 
     // Save the PDF
     doc.save(`ECG_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
@@ -867,6 +893,5 @@ const ECGMonitor: React.FC = () => {
     </div>
   );
 };
-
 
 export default ECGMonitor;
